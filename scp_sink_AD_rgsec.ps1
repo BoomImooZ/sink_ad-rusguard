@@ -253,12 +253,12 @@ function Sql-ADD_EmployeeAcsAccessLevel {
         foreach ($user in $Users[$group].keys){
             #Если нет пользователя или отключен - то создаст/включит его
 
-            if ((-not (Get-SQLuser -User $Users[$group][$user])[$Users[$group][$user]['samaccountname']] ) -or
-                (((Get-SQLuser -User $Users[$group][$user])[$Users[$group][$user]['samaccountname']]).IsRemoved)) {
+            if ((-not (Sql-GetUser -User $Users[$group][$user])[$Users[$group][$user]['samaccountname']] ) -or
+                (((Sql-GetUser -User $Users[$group][$user])[$Users[$group][$user]['samaccountname']]).IsRemoved)) {
 
                 Sql-AddUser $Users[$group][$user]
             }
-            $user_id = ((Get-SQLuser -User $Users[$group][$user])[$Users[$group][$user]['samaccountname']])['_id']
+            $user_id = ((Sql-GetUser -User $Users[$group][$user])[$Users[$group][$user]['samaccountname']])['_id']
             Sql-EmplAcsAccessLevel -User_id $user_id -Group_id $group_id
         }
     }
