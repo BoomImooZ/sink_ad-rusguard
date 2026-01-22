@@ -10,7 +10,7 @@ $connection.Open()
 $command = $connection.CreateCommand() # Не запоминай в ней свою команду - каждый раз эта переменная используется под разные команды!!
 $Def_Group_SQL_for_user = 'GUID_DEF_GROUP_ON_SQL_RGSEC' # Группа пользователей в которую будут добавлены пользователи на SQL
 
-
+#У пользователей должны быть заполнены Name и SamaccountName иначе будет падать в ошибку
 #Укажи сюда нужные группы, можно как списком так и 1 группу
 $GroupList ="SKUD_1floor","SKUD_office_5floor"#,"2" #Введи названия групп или передай в эту переменную нужные группы
 
@@ -83,7 +83,7 @@ function Sql-EmplAcsAccessLevel {
     )
 
         #проверка - выдана ли пользователю группа, если не выдана, то выдать
-        $reader.Close()
+        #$reader.Close()
         $command.CommandText = ""
         $command.Parameters.Clear()
         $command.CommandText = "SELECT * FROM dbo.EmployeeAcsAccessLevel WHERE EmployeeID = @EmployeeID AND AcsAccessLevelID = @AcsAccessLevelID"
@@ -115,7 +115,7 @@ function Get-GroupInfo {
     )
     $result= @{}
     foreach($group in $Groups){
-        $GroupMembers = Get-ADGroupMember -Identity $group | Where-Object { $_.objectClass -eq 'User' } | Select-Object samaccountname, name
+        $GroupMembers = Get-ADGroupMember -Identity $group -Recursive | Where-Object { $_.objectClass -eq 'User' } | Select-Object samaccountname, name
         #Write-Output "Группа: $Group"
         foreach($member in $GroupMembers){
             $users[$member.samaccountname] = @{
@@ -125,9 +125,11 @@ function Get-GroupInfo {
                 lastname = ($member.name -split(" "))[0]      #Фамилия
                 title = (Get-ADUser -Identity $member.samaccountname -Properties title | Select-Object title).title
                 photo = (Get-ADUser -Identity $member.samaccountname -Properties jpegphoto | Select-Object jpegphoto).jpegphoto[0]
+                postalCode = (Get-ADUser -Identity $member.samaccountname -Properties postalCode | Select-Object postalCode).postalCode # тут хранится значение о карте сотрудника
             }
         $result[$group] = $users
         }
+        $users = @{}
     }
     return $result
 }
@@ -158,27 +160,26 @@ function Sql-GetUser {
     return $sqluser
     
 }
-
-
 #Вывод данных о группах доступа
 function Sql-GetAcsAccessLevel {
 
     $AcsAccessLevel_data = @{}
     $Data = @{}
-
-
     foreach ($Group in $GroupList){
-        $reader.Close()
+        #$reader.Close()
         $command.CommandText = ""
         $command.Parameters.Clear()
         $command.CommandText = "SELECT * FROM dbo.AcsAccessLevel WHERE Name = @Name"
         $command.Parameters.Add("@Name", [System.Data.SqlDbType]::NVarChar, 255).Value = $Group
-        $reader = $command.ExecuteReader()
-        if (-not $reader.Read()){
-            $reader.Close() 
-            Sql-ADD_AcsAccessLevel -Group $Group
-        }
-        $reader.Close()
+        try{
+            $reader = $command.ExecuteReader()
+            if (-not $reader.Read()){
+                $reader.Close() 
+                Sql-ADD_AcsAccessLevel -Group $Group
+            }
+            $reader.Close()
+            } catch {#Да я знаю что тут иногда возникает ошибка
+                }
     }
 
     $reader.Close()
@@ -188,6 +189,8 @@ function Sql-GetAcsAccessLevel {
     while ($reader.Read()) {
 
         for ($i=0; $i -lt $reader.FieldCount; $i++){
+            #$reader.GetName($i)            
+            #$reader[$i]
             $columnName = $reader.GetName($i)
             $columnValue = $reader[$i]
             $Data[$columnName] = $columnValue
@@ -235,8 +238,6 @@ function Sql-AddUser {
         $result = "Пользователь "+$User["samaccountname"]+" создан"
         $reader.Close()
     }
-    Sql-ADD_EmployeePhoto -User $User
-    Sql-ADD_AcsKeys -User $User
     return $result
 
 }
@@ -250,8 +251,12 @@ function Sql-ADD_EmployeeAcsAccessLevel {
     )
     foreach ($group in $Users.Keys){
         $group_id = (Sql-GetAcsAccessLevel)[$Group]['_id']
+        #Группа в которую надо добавить пользователя
+        #$group
+        #(Sql-GetAcsAccessLevel)[$Group]
+
         foreach ($user in $Users[$group].keys){
-            #Если нет пользователя или отключен - то создаст/включит его
+            #Если нет пользователя или отключен - то создаст его
 
             if ((-not (Sql-GetUser -User $Users[$group][$user])[$Users[$group][$user]['samaccountname']] ) -or
                 (((Sql-GetUser -User $Users[$group][$user])[$Users[$group][$user]['samaccountname']]).IsRemoved)) {
@@ -273,10 +278,11 @@ function Sql-ADD_AcsKeys {
         $User
     )
     $User
+    $user_id = ((Sql-GetUser $User)[$User['samaccountname']])['_id']
     $counter_rows = 0
     $sqldata =@{}
     $rows = @{}
-    $user_id = ((Sql-GetUser $User)[$User['samaccountname']])['_id']
+
     
     $reader.Close()
     $command.CommandText = ""
@@ -291,7 +297,7 @@ function Sql-ADD_AcsKeys {
         }    
         $rows[$counter_rows] = $sqldata
     }
-    $card_id = $rows.Count+1
+    $card_id = $User['samaccountname']['postalCode']
     $reader.Close()
     $command.CommandText = ""
     $command.Parameters.Clear()
@@ -329,9 +335,6 @@ function Sql-ADD_AcsKeys {
 }
 
 
-
-
-#Нужен скрипт который уберет из группы доступа, если отозвали права
 #Удаление из группы доступа
 function Sql-DEL_EmplAcsAccessLevel {
     param(
@@ -343,7 +346,7 @@ function Sql-DEL_EmplAcsAccessLevel {
         $all_user_ids = @{}
         foreach ($group in $Users.keys){
             $group_id=[guid]((Sql-GetAcsAccessLevel)[$group])['_id']
-            $reader.Close()
+            #$reader.Close()
             $command.CommandText = ""
             $command.Parameters.Clear()
             $command.CommandText = "SELECT EmployeeID FROM dbo.EmployeeAcsAccessLevel WHERE AcsAccessLevelID = @AcsAccessLevelID"
@@ -371,6 +374,9 @@ function Sql-DEL_EmplAcsAccessLevel {
                     }
                 }
                 if ($find -eq 0){
+                    #$u_acl
+                    #$group_id
+                    
                     $reader.Close()
                     $command.CommandText = ""
                     $command.Parameters.Clear()
@@ -389,9 +395,24 @@ function Sql-DEL_EmplAcsAccessLevel {
         return "Закончил забирать доступы у пользователей"
 }
 
+
+
+
+#$users = Get-GroupInfo -Groups $GroupList
+#Sql-DEL_EmplAcsAccessLevel -Users $users
+
+
+#Нужен скрипт который пометит на удаление учетку, если она отключена
+
+
+
+
+
 # Вызов Тут мейн:
+
 
 #Основной рабочий скрипт 
 $users = Get-GroupInfo -Groups $GroupList
+#$users
 Sql-ADD_EmployeeAcsAccessLevel  -Users $users
 Sql-DEL_EmplAcsAccessLevel -Users $users
